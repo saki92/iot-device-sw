@@ -13,9 +13,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#define CONSUMER "Motor controller"
 #define SERVER_IP "35.153.79.3"
 #define SERVER_PORT 9482
-#define MSG_SIZE 32
+#define MSG_SIZE 16
 #define MSG_TYPE_A 0
 #define MSG_TYPE_B 1
 #define DEVICE_ID 1
@@ -26,91 +27,102 @@
 
 #define GPIO_CHIP_0 "gpiochip0"
 #define GPIO_CHIP_1 "gpiochip1"
-#define VAL0_PIN 35
-#define VAL1_PIN 37
-#define NC_PIN 36
-#define NO_PIN 38
-#define MOTOR_STATE_PIN 33
+#define VAL0_PIN 86
+#define VAL1_PIN 84
+#define NC_PIN 81
+#define NO_PIN 82
+#define MOTOR_STATE_PIN 85
 
 int client_socket;
 timer_t motor_cutoff_timer;
 timer_t msg_A_timer;
 
+struct gpiod_chip *chip;
+struct gpiod_line *valve0;
+struct gpiod_line *valve1;
+struct gpiod_line *nc;
+struct gpiod_line *no;
+struct gpiod_line *motor_state;
+
+enum pin_dir { INPUT, OUTPUT };
+
 int get_rssi(void) { return -33; }
 
-int get_pin_state(int pin) {
-  char *chipname = GPIO_CHIP_0;
-  unsigned int line_num = pin;
-  int val = -1;
-  struct gpiod_chip *chip;
-  struct gpiod_line *line;
-  int i, ret;
+int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
+               enum pin_dir dir) {
+  if (!chip) {
+    return -1;
+  }
 
+  *line = gpiod_chip_get_line(chip, pin);
+  if (!(*line)) {
+    return -1;
+  }
+
+  if (dir == OUTPUT)
+    gpiod_line_request_output(*line, CONSUMER, 0);
+  else
+    gpiod_line_request_input(*line, CONSUMER);
+
+  return 0;
+}
+
+int gpio_init() {
+  char *chipname = GPIO_CHIP_1;
   chip = gpiod_chip_open_by_name(chipname);
   if (!chip) {
-    perror("Open chip failed\n");
-    goto end;
+    printf("Open chip failed\n");
+    return -1;
   }
 
-  line = gpiod_chip_get_line(chip, line_num);
-  if (!line) {
-    perror("Get line failed\n");
-    goto close_chip;
-  }
+  int ret = 0;
+  ret = assign_pin(chip, &valve0, VAL0_PIN, OUTPUT);
+  ret |= assign_pin(chip, &valve1, VAL1_PIN, OUTPUT);
+  ret |= assign_pin(chip, &nc, NC_PIN, OUTPUT);
+  ret |= assign_pin(chip, &no, NO_PIN, OUTPUT);
+  ret |= assign_pin(chip, &motor_state, MOTOR_STATE_PIN, INPUT);
 
-  ret = gpiod_line_request_input(line, "Consumer");
-  if (ret < 0) {
-    perror("Request line as input failed\n");
-    goto release_line;
-  }
-
-  val = gpiod_line_get_value(line);
-  if (val < 0) {
-    perror("Read line input failed\n");
-    goto release_line;
-  }
-
-release_line:
-  gpiod_line_release(line);
-close_chip:
-  gpiod_chip_close(chip);
-end:
-  return val;
+  return ret;
 }
 
 uint8_t gen_GPIO_state_byte(void) {
-  int val0_state = get_pin_state(VAL0_PIN);
-  int val1_state = get_pin_state(VAL1_PIN);
-  int nc_state = get_pin_state(NC_PIN);
-  int no_state = get_pin_state(NO_PIN);
-  int motor_state = get_pin_state(MOTOR_STATE_PIN);
+  int val0_state = gpiod_line_get_value(valve0);
+  int val1_state = gpiod_line_get_value(valve1);
+  int nc_state = gpiod_line_get_value(nc);
+  int no_state = gpiod_line_get_value(no);
+  int motor_state_val = gpiod_line_get_value(motor_state);
 
-  uint8_t byte = ((motor_state << 4) | (val1_state << 3) | (val0_state << 2) |
-                  (nc_state << 1) | no_state) &
+  uint8_t byte = ((motor_state_val << 4) | (val1_state << 3) |
+                  (val0_state << 2) | (nc_state << 1) | no_state) &
                  0xFF;
 
   return byte;
 }
 
-void start_timer(int sec, void (*handler)(int, siginfo_t *, void *),
+void adjust_timer(int sec, int interval, timer_t *timerid) {
+  struct itimerspec its;
+
+  its.it_value.tv_sec = sec;
+  its.it_value.tv_nsec = 0;
+  its.it_interval.tv_sec = interval;
+  its.it_interval.tv_nsec = 0;
+  timer_settime(*timerid, 0, &its, NULL);
+}
+
+void start_timer(int sec, int interval, void (*handler)(union sigval),
                  timer_t *timerid) {
   struct sigevent sev;
   struct itimerspec its;
-  struct sigaction sa;
 
-  memset(&sa, 0, sizeof(sa));
-  sa.sa_flags = SA_SIGINFO;
-  sa.sa_sigaction = handler;
-  sigaction(SIGRTMIN, &sa, NULL);
-
-  sev.sigev_notify = SIGEV_SIGNAL;
-  sev.sigev_signo = SIGRTMIN;
-  sev.sigev_value.sival_ptr = timerid;
+  memset(&sev, 0, sizeof(sev));
+  sev.sigev_notify = SIGEV_THREAD;
+  sev.sigev_notify_function = handler;
+  sev.sigev_notify_attributes = NULL;
   timer_create(CLOCK_REALTIME, &sev, timerid);
 
   its.it_value.tv_sec = sec;
   its.it_value.tv_nsec = 0;
-  its.it_interval.tv_sec = sec;
+  its.it_interval.tv_sec = interval;
   its.it_interval.tv_nsec = 0;
   timer_settime(*timerid, 0, &its, NULL);
 }
@@ -154,10 +166,10 @@ void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
   buffer[13] = remTime & 0xFF;
   buffer[14] = (remTime >> 8) & 0xFF;
 
-  buffer[12] = gen_GPIO_state_byte();
+  buffer[15] = gen_GPIO_state_byte();
 }
 
-void send_msg_A(int signum, siginfo_t *info, void *context) {
+void send_msg_A(union sigval sv) {
   printf("timer expired. sending msg A\n");
   uint8_t message[MSG_SIZE];
   memset(message, 0, sizeof(message));
@@ -169,17 +181,77 @@ void send_msg_A(int signum, siginfo_t *info, void *context) {
   printf("sent %d bytes\n", sent_bytes);
 }
 
+void start_motor() {
+  printf("Starting motor\n");
+  gpiod_line_set_value(no, 1);
+  usleep(STARTER_BUTTON_TIMER * 1000);
+  gpiod_line_set_value(no, 0);
+}
+
+void stop_motor() {
+  printf("Stopping motor\n");
+  gpiod_line_set_value(nc, 1);
+  usleep(STARTER_BUTTON_TIMER * 1000);
+  gpiod_line_set_value(nc, 0);
+}
+
+void stop_motor_t(union sigval sv) {
+  stop_motor();
+  timer_delete(motor_cutoff_timer);
+}
+
+void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
+  if (buffer[0] != MSG_TYPE_B)
+    return;
+
+  if ((buffer[1] != PASSCODE_LO) || (buffer[2] != PASSCODE_HI))
+    return;
+
+  if (buffer[3] != DEVICE_ID)
+    return;
+
+  printf("Received MSG B\n");
+  uint16_t remTime = ((buffer[5] << 8) & 0xFF00) | (buffer[4] & 0xFF);
+  uint8_t recMotorState = buffer[6] & 0x1;
+  uint8_t val0State = (buffer[6] >> 1) & 0x1;
+  uint8_t val1State = (buffer[6] >> 2) & 0x1;
+
+  uint8_t curMotorState = gpiod_line_get_value(motor_state);
+  gpiod_line_set_value(valve0, val0State);
+  gpiod_line_set_value(valve1, val1State);
+
+  int remTimeSec = remTime * 60;
+  if (recMotorState) {
+    if ((remTime > 0) && (!curMotorState)) {
+      start_motor();
+      start_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer);
+    } else if ((remTime > 0) && (curMotorState)) {
+      adjust_timer(remTimeSec, 0, &motor_cutoff_timer);
+    }
+  } else {
+    if (curMotorState) {
+      stop_motor();
+      timer_delete(motor_cutoff_timer);
+    }
+  }
+}
+
 void *receive_data(void *arg) {
 
   while (1) {
     // Receive data from the server
     uint8_t buffer[MSG_SIZE];
-    recv(client_socket, buffer, sizeof(buffer), 0);
-    printf("Server says: %s\n", buffer);
+    int rec_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
+    handle_msg_B(buffer);
   }
 }
 
 int main() {
+  if (gpio_init() < 0) {
+    printf("Error in gpio init\n");
+    return -1;
+  }
+
   struct sockaddr_in server_address;
 
   // Create a socket
@@ -205,7 +277,7 @@ int main() {
   }
 
   // Send MSG A periodically
-  start_timer(MSG_A_PERIOD_S, send_msg_A, &msg_A_timer);
+  start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer);
 
   pthread_t receiver_thread;
   pthread_create(&receiver_thread, NULL, receive_data, NULL);
