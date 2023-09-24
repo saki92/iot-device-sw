@@ -13,6 +13,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <spi.h>
+
 #define CONSUMER "Motor controller"
 #define SERVER_IP "35.153.79.3"
 #define SERVER_PORT 9482
@@ -141,15 +143,11 @@ void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
   buffer[3] = DEVICE_ID;
   buffer[4] = get_rssi();
 
-  /*uint16_t adc0 = ADC_Read (0);
-   uint16_t adc1 = ADC_Read (1);
-   uint16_t adc2 = ADC_Read (2);
-   uint16_t adc3 = ADC_Read (3);*/
+  uint16_t adc0 = get_raw_voltage(0);
+  uint16_t adc1 = get_raw_voltage(1);
+  uint16_t adc2 = get_raw_voltage(2);
+  uint16_t adc3 = get_raw_voltage(3);
 
-  uint16_t adc0 = 100;
-  uint16_t adc1 = 450;
-  uint16_t adc2 = 560;
-  uint16_t adc3 = 190;
   buffer[5] = adc0 & 0xFF;       // 8 bits
   buffer[6] = (adc0 >> 8) & 0x3; // MSB 2 bits
 
@@ -249,6 +247,11 @@ void *receive_data(void *arg) {
 int main() {
   if (gpio_init() < 0) {
     printf("Error in gpio init\n");
+    return -1;
+  }
+
+  if (spi_init() < 0) {
+    printf("Error initializing SPI0\n");
     return -1;
   }
 
