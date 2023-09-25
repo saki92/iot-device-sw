@@ -238,12 +238,12 @@ void *receive_data(void *arg) {
     uint8_t buffer[AES_MSG_SIZE];
     int rec_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
 
+    printf("got %d bytes\n", rec_bytes);
     unsigned char iv[AES_IV_LENGTH_BYTE];
     memcpy(iv, buffer, AES_IV_LENGTH_BYTE);
     unsigned char key[AES_KEY_LENGTH_BYTE] = AES_KEY;
 
-    uint8_t decData[MSG_SIZE];
-    memset(decData, 0, sizeof(decData));
+    uint8_t decData[MSG_SIZE] = {0};
     decryptAES(buffer + AES_IV_LENGTH_BYTE, MSG_SIZE, (uint8_t *)key,
                (uint8_t *)iv, decData);
     handle_msg_B(decData);

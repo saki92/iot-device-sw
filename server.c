@@ -105,8 +105,8 @@ void set_device_buffer(int device_id, const char in_buffer[MSG_SIZE]) {
 }
 
 int handle_client_message(const int in_socket,
-                          const char in_buffer[MSG_SIZE],
-                          char out_buffer[MSG_SIZE]) {
+                          const char in_buffer[AES_MSG_SIZE],
+                          char out_buffer[AES_MSG_SIZE]) {
   enum message_types msg_type = in_buffer[MSG_TYPE_IDX];
   printf("Msg type %d\n", msg_type);
   int out_socket = -1;
@@ -139,19 +139,19 @@ int handle_client_message(const int in_socket,
 
   case MSG_TYPE_C2:
     unsigned char iv[AES_IV_LENGTH_BYTE];
-    memcpy(iv, in_buffer, AES_IV_LENGTH_BYTE);
+    memcpy(iv, in_buffer + 1, AES_IV_LENGTH_BYTE);
     unsigned char key[AES_KEY_LENGTH_BYTE] = AES_KEY;
 
     uint8_t decData[MSG_SIZE];
     memset(decData, 0, sizeof(decData));
-    decryptAES(in_buffer + AES_IV_LENGTH_BYTE, MSG_SIZE, (uint8_t *)key,
+    decryptAES(in_buffer + 1 + AES_IV_LENGTH_BYTE, MSG_SIZE, (uint8_t *)key,
                (uint8_t *)iv, decData);
     device_id = decData[3];
     set_device_buffer(device_id, decData);
-    out_socket = get_device_buffer(device_id, out_buffer, MSG_TYPE_B);
-    for (int i = 0; i < 9; i++) {
-      printf("%d: %d\n", i, out_buffer[i]);
-    }
+    out_socket = get_device_buffer(device_id, decData, MSG_TYPE_B);
+
+    memcpy(out_buffer, iv, AES_IV_LENGTH_BYTE);
+    encryptAES(decData, MSG_SIZE, (uint8_t *)key, (uint8_t *)iv, out_buffer + AES_IV_LENGTH_BYTE);
     break;
 
   default:
@@ -167,7 +167,7 @@ int main() {
   struct sockaddr_in address;
   int addrlen = sizeof(address);
   char in_buffer[AES_MSG_SIZE] = {0};
-  char out_buffer[MSG_SIZE] = {0};
+  char out_buffer[AES_MSG_SIZE] = {0};
 
   // Create a socket
   if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
@@ -246,7 +246,7 @@ int main() {
     for (int i = 0; i < max_clients; i++) {
       if (FD_ISSET(client_sockets[i], &read_fds)) {
         int valread;
-        if ((valread = read(client_sockets[i], in_buffer, MSG_SIZE)) == 0) {
+        if ((valread = read(client_sockets[i], in_buffer, AES_MSG_SIZE)) == 0) {
           getpeername(client_sockets[i], (struct sockaddr *)&address,
                       (socklen_t *)&addrlen);
           printf("Host disconnected, ip %s, port %d\n",
