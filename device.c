@@ -34,6 +34,7 @@
 
 int client_socket;
 timer_t motor_cutoff_timer;
+bool motor_timer_valid = false;
 timer_t msg_A_timer;
 
 struct gpiod_chip *chip;
@@ -130,7 +131,7 @@ int get_timer_state(timer_t *timerid) {
   // Get the current state of the timer
   struct itimerspec current_its;
   timer_gettime(*timerid, &current_its);
-  return current_its.it_value.tv_sec / 60;
+  return motor_timer_valid ? (current_its.it_value.tv_sec / 60) : 0;
 }
 
 void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
@@ -193,6 +194,7 @@ void stop_motor() {
 void stop_motor_t(union sigval sv) {
   stop_motor();
   timer_delete(motor_cutoff_timer);
+  motor_timer_valid = false;
 }
 
 void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
@@ -220,6 +222,7 @@ void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
     if ((remTime > 0) && (!curMotorState)) {
       start_motor();
       start_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer);
+      motor_timer_valid = true;
     } else if ((remTime > 0) && (curMotorState)) {
       adjust_timer(remTimeSec, 0, &motor_cutoff_timer);
     }
@@ -227,6 +230,7 @@ void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
     if (curMotorState) {
       stop_motor();
       timer_delete(motor_cutoff_timer);
+      motor_timer_valid = false;
     }
   }
 }
