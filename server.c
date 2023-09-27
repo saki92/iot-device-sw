@@ -105,8 +105,8 @@ void set_device_buffer(int device_id, const char in_buffer[MSG_SIZE]) {
 }
 
 int handle_client_message(const int in_socket,
-                          const char in_buffer[AES_MSG_SIZE],
-                          char out_buffer[AES_MSG_SIZE]) {
+                          const uint8_t in_buffer[AES_MSG_SIZE],
+                          uint8_t out_buffer[AES_MSG_SIZE]) {
   enum message_types msg_type = in_buffer[MSG_TYPE_IDX];
   printf("Msg type %d\n", msg_type);
   int out_socket = -1;
@@ -150,6 +150,7 @@ int handle_client_message(const int in_socket,
     set_device_buffer(device_id, decData);
     out_socket = get_device_buffer(device_id, decData, MSG_TYPE_B);
 
+    memset(out_buffer, 0, sizeof(*out_buffer));
     memcpy(out_buffer, iv, AES_IV_LENGTH_BYTE);
     encryptAES(decData, MSG_SIZE, (uint8_t *)key, (uint8_t *)iv, out_buffer + AES_IV_LENGTH_BYTE);
     break;
@@ -166,8 +167,8 @@ int main() {
       max_clients = MAX_CLIENTS;
   struct sockaddr_in address;
   int addrlen = sizeof(address);
-  char in_buffer[AES_MSG_SIZE] = {0};
-  char out_buffer[AES_MSG_SIZE] = {0};
+  uint8_t in_buffer[AES_MSG_SIZE] = {0};
+  uint8_t out_buffer[AES_MSG_SIZE] = {0};
 
   // Create a socket
   if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
@@ -254,7 +255,7 @@ int main() {
           close(client_sockets[i]);
           client_sockets[i] = 0;
         } else {
-          printf("Received message from client %d\n", i);
+          printf("Received %d bytes from client %d\n", valread, i);
           int send_socket =
               handle_client_message(client_sockets[i], in_buffer, out_buffer);
           if (send_socket > -1) {

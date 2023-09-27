@@ -231,66 +231,80 @@ void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
   }
 }
 
-void *receive_data(void *arg) {
+void receive_data(void) {
 
   while (1) {
     // Receive data from the server
-    uint8_t buffer[AES_MSG_SIZE];
-    int rec_bytes = recv(client_socket, buffer, sizeof(buffer), 0);
+    int8_t buffer[AES_MSG_SIZE];
+    int rec_bytes = read(client_socket, buffer, sizeof(buffer));
 
+    // Close socket if server terminates connection
     printf("got %d bytes\n", rec_bytes);
-    unsigned char iv[AES_IV_LENGTH_BYTE];
-    memcpy(iv, buffer, AES_IV_LENGTH_BYTE);
-    unsigned char key[AES_KEY_LENGTH_BYTE] = AES_KEY;
+    if (rec_bytes == 0) {
+      close(client_socket);
+      client_socket = -1;
+      break;
+    }
 
+    // Decrypt recieved message
+    uint8_t iv[AES_IV_LENGTH_BYTE];
+    memcpy(iv, buffer, AES_IV_LENGTH_BYTE);
+    uint8_t key[AES_KEY_LENGTH_BYTE] = AES_KEY;
     uint8_t decData[MSG_SIZE] = {0};
-    decryptAES(buffer + AES_IV_LENGTH_BYTE, MSG_SIZE, (uint8_t *)key,
-               (uint8_t *)iv, decData);
+    decryptAES(buffer + AES_IV_LENGTH_BYTE, MSG_SIZE + MSG_SIZE, key, iv,
+               decData);
+
+    // Process message
     handle_msg_B(decData);
   }
 }
 
 int main() {
+  // Initialize GPIO
   if (gpio_init() < 0) {
     printf("Error in gpio init\n");
     return -1;
   }
 
+  // Initialize SPI
   if (spi_init() < 0) {
     printf("Error initializing SPI0\n");
     return -1;
   }
 
-  struct sockaddr_in server_address;
-
-  // Create a socket
-  client_socket = socket(AF_INET, SOCK_STREAM, 0);
-  if (client_socket == -1) {
-    perror("Error creating socket");
-    exit(1);
-  }
-
-  // Set up the server address structure
-  server_address.sin_family = AF_INET;
-  server_address.sin_port =
-      htons(SERVER_PORT); // Change this port number as needed
-  server_address.sin_addr.s_addr =
-      inet_addr(SERVER_IP); // Replace with the server's IP address or domain
-
-  // Connect to the server
-  if (connect(client_socket, (struct sockaddr *)&server_address,
-              sizeof(server_address)) == -1) {
-    perror("Error connecting to server");
-    close(client_socket);
-    exit(1);
-  }
-
   // Send MSG A periodically
   start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer);
 
-  pthread_t receiver_thread;
-  pthread_create(&receiver_thread, NULL, receive_data, NULL);
-  pthread_join(receiver_thread, NULL);
+  struct sockaddr_in server_address;
+
+  client_socket = -1;
+  while (client_socket == -1) {
+    // Create a socket
+    usleep(10 * 1000 * 1000);
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket == -1) {
+      perror("Error creating socket");
+      continue;
+    }
+
+    // Set up the server address structure
+    server_address.sin_family = AF_INET;
+    server_address.sin_port =
+        htons(SERVER_PORT); // Change this port number as needed
+    server_address.sin_addr.s_addr =
+        inet_addr(SERVER_IP); // Replace with the server's IP address or domain
+
+    // Connect to the server
+    if (connect(client_socket, (struct sockaddr *)&server_address,
+                sizeof(server_address)) == -1) {
+      perror("Error connecting to server");
+      close(client_socket);
+      client_socket = -1;
+      continue;
+    }
+    receive_data();
+  }
+
   // Close the socket
   close(client_socket);
 
