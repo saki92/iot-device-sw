@@ -20,7 +20,6 @@
 
 #define CONSUMER "Motor controller"
 #define SERVER_IP "35.153.79.3"
-#define DEVICE_ID 1
 
 #define STARTER_BUTTON_TIMER 200
 #define MSG_A_PERIOD_S 10

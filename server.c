@@ -18,6 +18,14 @@ https://docs.google.com/document/d/1qKUy8KDCigRU7vQpS-_mssLqFaAL-WPIdzxzrYwKAF0
 
 struct device_s all_devices[MAX_DEVICES];
 
+uint8_t deviceIdList[MAX_DEVICES] = {1, 2}; // Random IDs
+
+void init_device_list(struct device_s device_list[MAX_DEVICES]) {
+  for (int i = 0; i < MAX_DEVICES; i++) {
+    device_list[i].id = deviceIdList[i];
+  }
+}
+
 void rand_device_list(struct device_s device_list[MAX_DEVICES]) {
   for (int i = 0; i < 2; i++) {
     struct device_s *d = device_list + i;
@@ -27,16 +35,16 @@ void rand_device_list(struct device_s device_list[MAX_DEVICES]) {
 }
 
 void store_data(const int in_socket, const char in_buffer[MSG_SIZE]) {
-  struct device_s *current_device;
+  struct device_s *current_device = NULL;
   for (int i = 0; i < MAX_DEVICES; i++) {
     int current_device_id = all_devices[i].id;
-    if (current_device_id == 0 || current_device_id == in_buffer[3]) {
+    if (current_device_id == in_buffer[3]) {
       current_device = &all_devices[i];
       break;
     }
-    perror("All device buffer full. No space for new device");
-    exit(EXIT_FAILURE);
   }
+
+  if (current_device == NULL) return;
 
   int idx = 1;
   current_device->passcode = *((int16_t *)(in_buffer + idx));
@@ -89,6 +97,9 @@ int get_device_buffer(int device_id, char out_buffer[MSG_SIZE],
     }
   }
   out_buffer[0] = msg_type;
+#ifdef DEBUG_PRINT
+  for (int i=0;i<16;i++) printf("%d:%d\n",i,out_buffer[i]);
+#endif
   return device->socket;
 }
 
@@ -147,6 +158,9 @@ int handle_client_message(const int in_socket,
     decryptAES(in_buffer + 1 + AES_IV_LENGTH_BYTE, MSG_SIZE, (uint8_t *)key,
                (uint8_t *)iv, decData);
     device_id = decData[3];
+#ifdef DEBUG_PRINT
+    for (int i=0;i<16;i++) printf("%d:%d\n",i,decData[i]);
+#endif
     set_device_buffer(device_id, decData);
     out_socket = get_device_buffer(device_id, decData, MSG_TYPE_B);
 
@@ -163,6 +177,9 @@ int handle_client_message(const int in_socket,
 }
 
 int main() {
+
+  init_device_list(all_devices);
+
   int server_fd, new_socket, client_sockets[MAX_CLIENTS],
       max_clients = MAX_CLIENTS;
   struct sockaddr_in address;
