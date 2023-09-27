@@ -23,6 +23,7 @@ uint8_t deviceIdList[MAX_DEVICES] = {1, 2}; // Random IDs
 void init_device_list(struct device_s device_list[MAX_DEVICES]) {
   for (int i = 0; i < MAX_DEVICES; i++) {
     device_list[i].id = deviceIdList[i];
+    device_list[i].socket = -1;
   }
 }
 
@@ -68,7 +69,7 @@ void get_device_list(char out_buffer[MSG_SIZE]) {
   int device_cnt = 0;
   for (int i = 0; i < MAX_DEVICES; i++) {
     int current_device_id = all_devices[i].id;
-    if (current_device_id != 0) {
+    if (all_devices[i].socket > -1) {
       out_buffer[device_cnt + 2] = current_device_id;
       device_cnt++;
     }
@@ -270,7 +271,7 @@ int main() {
           printf("Host disconnected, ip %s, port %d\n",
                  inet_ntoa(address.sin_addr), ntohs(address.sin_port));
           close(client_sockets[i]);
-          client_sockets[i] = 0;
+          client_sockets[i] = -1;
         } else {
           printf("Received %d bytes from client %d\n", valread, i);
           int send_socket =
