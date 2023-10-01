@@ -47,6 +47,8 @@ enum pin_dir { INPUT, OUTPUT };
 
 int get_rssi(void) { return -33; }
 
+int make_connection();
+
 int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
                enum pin_dir dir) {
   if (!chip) {
@@ -172,6 +174,8 @@ void send_msg_A(union sigval sv) {
   int sent_bytes = send(client_socket, message, sizeof(message), 0);
   if (sent_bytes != MSG_SIZE) {
     printf("Error. Sent %d out of %d bytes\n", sent_bytes, MSG_SIZE);
+    close(client_socket);
+    client_socket = make_connection();
   }
   printf("sent %d bytes\n", sent_bytes);
 }
@@ -243,10 +247,9 @@ void receive_data(void) {
 
     // Close socket if server terminates connection
     printf("got %d bytes\n", rec_bytes);
-    if (rec_bytes == 0) {
-      close(client_socket);
-      client_socket = -1;
-      break;
+    if (rec_bytes < 1) {
+      usleep(10 * 1000 * 1000);
+      continue;
     }
 
     // Decrypt recieved message
@@ -260,6 +263,31 @@ void receive_data(void) {
     // Process message
     handle_msg_B(decData);
   }
+}
+
+int make_connection() {
+  int soc;
+  struct sockaddr_in server_address;
+
+  // Create a socket
+  soc = socket(AF_INET, SOCK_STREAM, 0);
+  if (soc == -1) {
+    perror("Error creating socket");
+  }
+
+  // Set up the server address structure
+  server_address.sin_family = AF_INET;
+  server_address.sin_port =
+      htons(SERVER_PORT); // Change this port number as needed
+  server_address.sin_addr.s_addr =
+      inet_addr(SERVER_IP); // Replace with the server's IP address or domain
+
+  // Connect to the server
+  if (connect(soc, (struct sockaddr *)&server_address,
+              sizeof(server_address)) == -1) {
+    perror("Error connecting to server");
+  }
+  return soc;
 }
 
 int main() {
@@ -278,35 +306,9 @@ int main() {
   // Send MSG A periodically
   start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer);
 
-  struct sockaddr_in server_address;
+  client_socket = make_connection();
 
-  client_socket = -1;
-  while (client_socket == -1) {
-    // Create a socket
-    usleep(10 * 1000 * 1000);
-    client_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (client_socket == -1) {
-      perror("Error creating socket");
-      continue;
-    }
-
-    // Set up the server address structure
-    server_address.sin_family = AF_INET;
-    server_address.sin_port =
-        htons(SERVER_PORT); // Change this port number as needed
-    server_address.sin_addr.s_addr =
-        inet_addr(SERVER_IP); // Replace with the server's IP address or domain
-
-    // Connect to the server
-    if (connect(client_socket, (struct sockaddr *)&server_address,
-                sizeof(server_address)) == -1) {
-      perror("Error connecting to server");
-      close(client_socket);
-      client_socket = -1;
-      continue;
-    }
-    receive_data();
-  }
+  receive_data();
 
   // Close the socket
   close(client_socket);
