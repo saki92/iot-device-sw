@@ -59,7 +59,7 @@ void store_data(const int in_socket, const char in_buffer[MSG_SIZE]) {
     return;
 
   if (current_device->socket == -1) {
-    // Fresh connection
+    // Fresh connection. start timer to disconnecting client after inactivity
     current_device->socket = in_socket;
     start_timer(CLIENT_INACTIVE_SEC, 0, disconnect_client,
                 &current_device->device_connection_timer, device_idx);
@@ -126,7 +126,6 @@ void set_device_buffer(int device_id, const char in_buffer[MSG_SIZE]) {
   for (int i = 0; i < MAX_DEVICES; i++) {
     device = &all_devices[i];
     if (device->id == device_id) {
-      memset(device->msg_C2_buf, 0, sizeof(char) * MSG_SIZE);
       memcpy(device->msg_C2_buf, in_buffer, sizeof(char) * MSG_SIZE);
       break;
     }
@@ -144,6 +143,7 @@ void disconnect_client(union sigval sv) {
   printf("Host disconnected, ip %s, port %d\n", inet_ntoa(address.sin_addr),
          ntohs(address.sin_port));
   close(socket);
+  all_devices[dev_idx].socket = -1;
   // Find client in client_sockets list
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (client_sockets[i] == socket) {
@@ -265,6 +265,7 @@ int main() {
     client_sockets[i] = -1;
   }
 
+  // Main loop
   while (1) {
     FD_ZERO(&read_fds);
     FD_SET(server_fd, &read_fds);
@@ -279,11 +280,13 @@ int main() {
       }
     }
 
+    // Check for event on sockets
     activity = select(max_sd + 1, &read_fds, NULL, NULL, NULL);
     if ((activity < 0) && (errno != EINTR)) {
       printf("Select error\n");
     }
 
+    // Check for incoming connection request
     if (FD_ISSET(server_fd, &read_fds)) {
       if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
                                (socklen_t *)&addrlen)) < 0) {
@@ -301,9 +304,11 @@ int main() {
       }
     }
 
+    // Check for incoming packets
     for (int i = 0; i < max_clients; i++) {
       if (FD_ISSET(client_sockets[i], &read_fds)) {
         int valread;
+        // Connection lost. Close socket
         if ((valread = read(client_sockets[i], in_buffer, AES_MSG_SIZE)) <= 0) {
           getpeername(client_sockets[i], (struct sockaddr *)&address,
                       (socklen_t *)&addrlen);
@@ -311,7 +316,7 @@ int main() {
                  inet_ntoa(address.sin_addr), ntohs(address.sin_port));
           close(client_sockets[i]);
           client_sockets[i] = -1;
-        } else {
+        } else { // Reveive incoming packets
           printf("Received %d bytes from client %d\n", valread, i);
           int send_socket =
               handle_client_message(client_sockets[i], in_buffer, out_buffer);
