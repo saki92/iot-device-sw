@@ -31,11 +31,13 @@
 #define NC_PIN 81
 #define NO_PIN 82
 #define MOTOR_STATE_PIN 85
+#define MAX_CONN_ERR 3
 
-int client_socket;
+int client_socket = -1;
 timer_t motor_cutoff_timer;
 bool motor_timer_valid = false;
 timer_t msg_A_timer;
+int conn_err_cnt = MAX_CONN_ERR;
 
 struct gpiod_chip *chip;
 struct gpiod_line *valve0;
@@ -168,17 +170,23 @@ void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
 }
 
 void send_msg_A(union sigval sv) {
-  printf("timer expired. sending msg A\n");
+  printf("timer expired. trying to send msg A\n");
   uint8_t message[MSG_SIZE];
   memset(message, 0, sizeof(message));
   gen_msg_A(message);
   int sent_bytes = send(client_socket, message, sizeof(message), 0);
   if (sent_bytes != MSG_SIZE) {
     printf("Error. Sent %d out of %d bytes\n", sent_bytes, MSG_SIZE);
-    close(client_socket);
-    client_socket = make_connection();
+    conn_err_cnt++;
+    if (conn_err_cnt >= MAX_CONN_ERR) {
+      close(client_socket);
+      client_socket = make_connection();
+      conn_err_cnt = 0;
+    }
+  } else {
+    conn_err_cnt = 0;
+    printf("sent %d bytes\n", sent_bytes);
   }
-  printf("sent %d bytes\n", sent_bytes);
 }
 
 void start_motor() {
@@ -287,6 +295,8 @@ int make_connection() {
   if (connect(soc, (struct sockaddr *)&server_address,
               sizeof(server_address)) == -1) {
     perror("Error connecting to server");
+  } else {
+    printf("connection with server etablished on soc %d\n", soc);
   }
   return soc;
 }
@@ -306,8 +316,6 @@ int main() {
 
   // Send MSG A periodically
   start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer);
-
-  client_socket = make_connection();
 
   receive_data();
 
