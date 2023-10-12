@@ -223,7 +223,7 @@ int main() {
   fd_set read_fds;
   int max_sd, activity;
   for (int i = 0; i < max_clients; i++) {
-    client_sockets[i] = 0;
+    client_sockets[i] = -1;
   }
 
   while (1) {
@@ -232,7 +232,7 @@ int main() {
     max_sd = server_fd;
 
     for (int i = 0; i < max_clients; i++) {
-      if (client_sockets[i] > 0) {
+      if (client_sockets[i] > -1) {
         FD_SET(client_sockets[i], &read_fds);
       }
       if (client_sockets[i] > max_sd) {
@@ -254,7 +254,7 @@ int main() {
       printf("New connection, socket fd is %d\n", new_socket);
 
       for (int i = 0; i < max_clients; i++) {
-        if (client_sockets[i] == 0) {
+        if (client_sockets[i] == -1) {
           client_sockets[i] = new_socket;
           printf("Adding to list of sockets as %d\n", i);
           break;
@@ -265,7 +265,7 @@ int main() {
     for (int i = 0; i < max_clients; i++) {
       if (FD_ISSET(client_sockets[i], &read_fds)) {
         int valread;
-        if ((valread = read(client_sockets[i], in_buffer, AES_MSG_SIZE)) == 0) {
+        if ((valread = read(client_sockets[i], in_buffer, AES_MSG_SIZE)) <= 0) {
           getpeername(client_sockets[i], (struct sockaddr *)&address,
                       (socklen_t *)&addrlen);
           printf("Host disconnected, ip %s, port %d\n",
