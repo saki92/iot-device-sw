@@ -13,10 +13,11 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "spi_device/spi.h"
+#include "aes/aes.h"
 #include "common.h"
 #include "server.h"
-#include "aes/aes.h"
+#include "spi_device/spi.h"
+#include "timer.h"
 
 #define CONSUMER "Motor controller"
 #define SERVER_IP "35.153.79.3"
@@ -101,34 +102,6 @@ uint8_t gen_GPIO_state_byte(void) {
                  0xFF;
 
   return byte;
-}
-
-void adjust_timer(int sec, int interval, timer_t *timerid) {
-  struct itimerspec its;
-
-  its.it_value.tv_sec = sec;
-  its.it_value.tv_nsec = 0;
-  its.it_interval.tv_sec = interval;
-  its.it_interval.tv_nsec = 0;
-  timer_settime(*timerid, 0, &its, NULL);
-}
-
-void start_timer(int sec, int interval, void (*handler)(union sigval),
-                 timer_t *timerid) {
-  struct sigevent sev;
-  struct itimerspec its;
-
-  memset(&sev, 0, sizeof(sev));
-  sev.sigev_notify = SIGEV_THREAD;
-  sev.sigev_notify_function = handler;
-  sev.sigev_notify_attributes = NULL;
-  timer_create(CLOCK_REALTIME, &sev, timerid);
-
-  its.it_value.tv_sec = sec;
-  its.it_value.tv_nsec = 0;
-  its.it_interval.tv_sec = interval;
-  its.it_interval.tv_nsec = 0;
-  timer_settime(*timerid, 0, &its, NULL);
 }
 
 int get_timer_state(timer_t *timerid) {
@@ -233,7 +206,7 @@ void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
   if (recMotorState) {
     if ((remTime > 0) && (!curMotorState)) {
       start_motor();
-      start_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer);
+      start_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer, -1);
       motor_timer_valid = true;
     } else if ((remTime > 0) && (curMotorState)) {
       adjust_timer(remTimeSec, 0, &motor_cutoff_timer);
@@ -315,7 +288,7 @@ int main() {
   }
 
   // Send MSG A periodically
-  start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer);
+  start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer, -1);
 
   receive_data();
 

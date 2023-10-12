@@ -2,6 +2,7 @@
 #define SERVER_BASE_H
 
 #include "common.h"
+#include <time.h>
 
 #define MAX_DEVICES 2
 #define MAX_CLIENTS 3
@@ -31,6 +32,7 @@ struct device_s {
   char gpio_states;
   char msg_A_buf[MSG_SIZE];
   char msg_C2_buf[MSG_SIZE];
+  timer_t device_connection_timer;
 };
 
 #endif

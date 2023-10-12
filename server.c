@@ -8,17 +8,25 @@ https://docs.google.com/document/d/1qKUy8KDCigRU7vQpS-_mssLqFaAL-WPIdzxzrYwKAF0
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "server.h"
 #include "aes/aes.h"
+#include "server.h"
+#include "timer.h"
+
+#define CLIENT_INACTIVE_SEC 60
 
 struct device_s all_devices[MAX_DEVICES];
 
 uint8_t deviceIdList[MAX_DEVICES] = {1, 2}; // Random IDs
+
+int client_sockets[MAX_CLIENTS];
+
+void disconnect_client(union sigval sv);
 
 void init_device_list(struct device_s device_list[MAX_DEVICES]) {
   for (int i = 0; i < MAX_DEVICES; i++) {
@@ -37,16 +45,25 @@ void rand_device_list(struct device_s device_list[MAX_DEVICES]) {
 
 void store_data(const int in_socket, const char in_buffer[MSG_SIZE]) {
   struct device_s *current_device = NULL;
+  int device_idx;
   for (int i = 0; i < MAX_DEVICES; i++) {
     int current_device_id = all_devices[i].id;
     if (current_device_id == in_buffer[3]) {
       current_device = &all_devices[i];
+      device_idx = i;
       break;
     }
   }
 
-  if (current_device == NULL) return;
+  if (current_device == NULL)
+    return;
 
+  if (current_device->socket == -1) {
+    // Fresh connection
+    current_device->socket = in_socket;
+    start_timer(CLIENT_INACTIVE_SEC, 0, disconnect_client,
+                &current_device->device_connection_timer, device_idx);
+  }
   int idx = 1;
   current_device->passcode = *((int16_t *)(in_buffer + idx));
   idx += 2;
@@ -60,7 +77,6 @@ void store_data(const int in_socket, const char in_buffer[MSG_SIZE]) {
   current_device->rem_cut_off_time = *((int16_t *)(in_buffer + idx));
   idx += 2;
   current_device->gpio_states = in_buffer[idx];
-  current_device->socket = in_socket;
   memcpy(current_device->msg_A_buf, in_buffer, sizeof(char) * MSG_SIZE);
 }
 
@@ -99,7 +115,8 @@ int get_device_buffer(int device_id, char out_buffer[MSG_SIZE],
   }
   out_buffer[0] = msg_type;
 #ifdef DEBUG_PRINT
-  for (int i=0;i<16;i++) printf("%d:%d\n",i,out_buffer[i]);
+  for (int i = 0; i < 16; i++)
+    printf("%d:%d\n", i, out_buffer[i]);
 #endif
   return device->socket;
 }
@@ -111,6 +128,26 @@ void set_device_buffer(int device_id, const char in_buffer[MSG_SIZE]) {
     if (device->id == device_id) {
       memset(device->msg_C2_buf, 0, sizeof(char) * MSG_SIZE);
       memcpy(device->msg_C2_buf, in_buffer, sizeof(char) * MSG_SIZE);
+      break;
+    }
+  }
+}
+
+void disconnect_client(union sigval sv) {
+
+  struct sockaddr_in address;
+  int addrlen = sizeof(address);
+  int dev_idx = sv.sival_int;
+  int socket = all_devices[dev_idx].socket;
+  timer_delete(all_devices[dev_idx].device_connection_timer);
+  getpeername(socket, (struct sockaddr *)&address, (socklen_t *)&addrlen);
+  printf("Host disconnected, ip %s, port %d\n", inet_ntoa(address.sin_addr),
+         ntohs(address.sin_port));
+  close(socket);
+  // Find client in client_sockets list
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (client_sockets[i] == socket) {
+      client_sockets[i] = -1;
       break;
     }
   }
@@ -160,14 +197,16 @@ int handle_client_message(const int in_socket,
                (uint8_t *)iv, decData);
     device_id = decData[3];
 #ifdef DEBUG_PRINT
-    for (int i=0;i<16;i++) printf("%d:%d\n",i,decData[i]);
+    for (int i = 0; i < 16; i++)
+      printf("%d:%d\n", i, decData[i]);
 #endif
     set_device_buffer(device_id, decData);
     out_socket = get_device_buffer(device_id, decData, MSG_TYPE_B);
 
     memset(out_buffer, 0, sizeof(*out_buffer));
     memcpy(out_buffer, iv, AES_IV_LENGTH_BYTE);
-    encryptAES(decData, MSG_SIZE, (uint8_t *)key, (uint8_t *)iv, out_buffer + AES_IV_LENGTH_BYTE);
+    encryptAES(decData, MSG_SIZE, (uint8_t *)key, (uint8_t *)iv,
+               out_buffer + AES_IV_LENGTH_BYTE);
     break;
 
   default:
@@ -181,8 +220,8 @@ int main() {
 
   init_device_list(all_devices);
 
-  int server_fd, new_socket, client_sockets[MAX_CLIENTS],
-      max_clients = MAX_CLIENTS;
+  int server_fd, new_socket;
+  int max_clients = MAX_CLIENTS;
   struct sockaddr_in address;
   int addrlen = sizeof(address);
   uint8_t in_buffer[AES_MSG_SIZE] = {0};
