@@ -143,7 +143,6 @@ void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
 }
 
 void send_msg_A(union sigval sv) {
-  printf("timer expired. trying to send msg A\n");
   uint8_t message[MSG_SIZE];
   memset(message, 0, sizeof(message));
   gen_msg_A(message);
@@ -158,7 +157,6 @@ void send_msg_A(union sigval sv) {
     }
   } else {
     conn_err_cnt = 0;
-    printf("sent %d bytes\n", sent_bytes);
   }
 }
 
