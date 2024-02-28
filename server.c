@@ -63,6 +63,9 @@ void store_data(const int in_socket, const char in_buffer[MSG_SIZE]) {
     current_device->socket = in_socket;
     start_timer(CLIENT_INACTIVE_SEC, 0, disconnect_client,
                 &current_device->device_connection_timer, device_idx);
+  } else {
+    adjust_timer(CLIENT_INACTIVE_SEC, 0,
+                 &current_device->device_connection_timer);
   }
   int idx = 1;
   current_device->passcode = *((int16_t *)(in_buffer + idx));
