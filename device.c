@@ -20,7 +20,7 @@
 #include "timer.h"
 
 #define CONSUMER "Motor controller"
-#define SERVER_IP "35.153.79.3"
+#define SERVER_IP "52.66.241.14"
 #define DEVICE_ID 1
 
 #define STARTER_BUTTON_TIMER 200
