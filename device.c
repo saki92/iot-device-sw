@@ -36,9 +36,8 @@
 #define MAX_CONN_ERR 3
 
 int client_socket = -1;
-timer_t motor_cutoff_timer;
-bool motor_timer_valid = false;
-timer_t msg_A_timer;
+timer_w_t motor_cutoff_timer;
+timer_w_t msg_A_timer;
 int conn_err_cnt = MAX_CONN_ERR;
 
 struct gpiod_chip *chip;
@@ -65,12 +64,13 @@ int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
     return -1;
   }
 
+  int ret = 0;
   if (dir == OUTPUT)
-    gpiod_line_request_output(*line, CONSUMER, 0);
+    ret = gpiod_line_request_output(*line, CONSUMER, 0);
   else
-    gpiod_line_request_input(*line, CONSUMER);
+    ret = gpiod_line_request_input(*line, CONSUMER);
 
-  return 0;
+  return ret;
 }
 
 int gpio_init() {
@@ -103,13 +103,6 @@ uint8_t gen_GPIO_state_byte(void) {
                  0xFF;
 
   return byte;
-}
-
-int get_timer_state(timer_t *timerid) {
-  // Get the current state of the timer
-  struct itimerspec current_its;
-  timer_gettime(*timerid, &current_its);
-  return motor_timer_valid ? (current_its.it_value.tv_sec / 60) : 0;
 }
 
 void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
@@ -177,8 +170,7 @@ void stop_motor() {
 
 void stop_motor_t(union sigval sv) {
   stop_motor();
-  timer_delete(motor_cutoff_timer);
-  motor_timer_valid = false;
+  stop_timer(&motor_cutoff_timer);
 }
 
 void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
@@ -197,24 +189,24 @@ void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
   uint8_t val0State = (buffer[6] >> 1) & 0x1;
   uint8_t val1State = (buffer[6] >> 2) & 0x1;
 
+  // motor_state HI=OFF; LOW=ON
   uint8_t curMotorState = gpiod_line_get_value(motor_state);
   gpiod_line_set_value(valve0, val0State);
   gpiod_line_set_value(valve1, val1State);
 
   int remTimeSec = remTime * 60;
+
   if (recMotorState) {
-    if ((remTime > 0) && (!curMotorState)) {
+    if ((remTime > 0) && (curMotorState)) {
       start_motor();
       start_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer, -1);
-      motor_timer_valid = true;
-    } else if ((remTime > 0) && (curMotorState)) {
-      adjust_timer(remTimeSec, 0, &motor_cutoff_timer);
+    } else if ((remTime > 0) && (!curMotorState)) { // adjust timer
+      adjust_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer, -1);
     }
   } else {
-    if (curMotorState) {
+    if (!curMotorState) {
       stop_motor();
-      timer_delete(motor_cutoff_timer);
-      motor_timer_valid = false;
+      stop_timer(&motor_cutoff_timer);
     }
   }
 }
@@ -274,6 +266,8 @@ int make_connection() {
 }
 
 int main() {
+  msg_A_timer.isValid = false;
+  motor_cutoff_timer.isValid = false;
   // Initialize GPIO
   if (gpio_init() < 0) {
     printf("Error in gpio init\n");
