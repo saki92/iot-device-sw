@@ -25,6 +25,7 @@
 
 #define STARTER_BUTTON_TIMER 200
 #define MSG_A_PERIOD_S 10
+#define USB_POWER_RESET_TIME 5
 #define GPIO_CHIP_0 "gpiochip0"
 #define GPIO_CHIP_1 "gpiochip1"
 #define GPIO_CHIP_2 "gpiochip2"
@@ -34,18 +35,21 @@
 #define NO_PIN 1
 #define MOTOR_STATE_PIN 16
 #define MAX_CONN_ERR 3
+#define USB_POWER_PIN 26
 
 int client_socket = -1;
 timer_w_t motor_cutoff_timer;
 timer_w_t msg_A_timer;
 int conn_err_cnt = MAX_CONN_ERR;
 
-struct gpiod_chip *chip;
+struct gpiod_chip *chip2;
 struct gpiod_line *valve0;
 struct gpiod_line *valve1;
 struct gpiod_line *nc;
 struct gpiod_line *no;
 struct gpiod_line *motor_state;
+struct gpiod_chip *chip1;
+struct gpiod_line *usb_power;
 
 enum pin_dir { INPUT, OUTPUT };
 
@@ -74,21 +78,42 @@ int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
 }
 
 int gpio_init() {
-  char *chipname = GPIO_CHIP_2;
-  chip = gpiod_chip_open_by_name(chipname);
-  if (!chip) {
-    printf("Open chip failed\n");
-    return -1;
+  {
+    char *chipname = GPIO_CHIP_2;
+    chip2 = gpiod_chip_open_by_name(chipname);
+    if (!chip2) {
+      printf("Open chip failed\n");
+      return -1;
+    }
   }
 
   int ret = 0;
-  ret = assign_pin(chip, &valve0, VAL0_PIN, OUTPUT);
-  ret |= assign_pin(chip, &valve1, VAL1_PIN, OUTPUT);
-  ret |= assign_pin(chip, &nc, NC_PIN, OUTPUT);
-  ret |= assign_pin(chip, &no, NO_PIN, OUTPUT);
-  ret |= assign_pin(chip, &motor_state, MOTOR_STATE_PIN, INPUT);
+  ret = assign_pin(chip2, &valve0, VAL0_PIN, OUTPUT);
+  ret |= assign_pin(chip2, &valve1, VAL1_PIN, OUTPUT);
+  ret |= assign_pin(chip2, &nc, NC_PIN, OUTPUT);
+  ret |= assign_pin(chip2, &no, NO_PIN, OUTPUT);
+  ret |= assign_pin(chip2, &motor_state, MOTOR_STATE_PIN, INPUT);
+
+  {
+    char *chipname = GPIO_CHIP_1;
+    chip1 = gpiod_chip_open_by_name(chipname);
+    if (!chip1) {
+      printf("Open chip failed\n");
+      return -1;
+    }
+  }
+
+  ret |= assign_pin(chip1, &usb_power, USB_POWER_PIN, OUTPUT);
+  gpiod_line_set_value(usb_power, 1);
 
   return ret;
+}
+
+void hard_reset_modem(void) {
+  printf("Resetting USB power.\n");
+  gpiod_line_set_value(usb_power, 0);
+  usleep(USB_POWER_RESET_TIME * 1000 * 1000);
+  gpiod_line_set_value(usb_power, 1);
 }
 
 uint8_t gen_GPIO_state_byte(void) {
@@ -145,8 +170,11 @@ void send_msg_A(union sigval sv) {
     printf("Error. Sent %d out of %d bytes\n", sent_bytes, MSG_SIZE);
     conn_err_cnt++;
     if (conn_err_cnt >= MAX_CONN_ERR) {
+      // try reconnecting
       close(client_socket);
+      stop_timer(&msg_A_timer);
       client_socket = make_connection();
+      start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer, -1);
       conn_err_cnt = 0;
     }
   } else {
@@ -256,11 +284,18 @@ int make_connection() {
       inet_addr(SERVER_IP); // Replace with the server's IP address or domain
 
   // Connect to the server
-  if (connect(soc, (struct sockaddr *)&server_address,
-              sizeof(server_address)) == -1) {
-    perror("Error connecting to server");
-  } else {
-    printf("connection with server etablished on soc %d\n", soc);
+  while (1) {
+    if (connect(soc, (struct sockaddr *)&server_address,
+                sizeof(server_address)) == -1) {
+      perror("Error connecting to server");
+      // maybe problem with modem. reset it
+      hard_reset_modem();
+      // give 30s to connect to network
+      usleep(30 * 1000 * 1000);
+    } else {
+      printf("connection with server etablished on soc %d\n", soc);
+      break;
+    }
   }
   return soc;
 }
