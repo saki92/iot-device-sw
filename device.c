@@ -20,18 +20,19 @@
 #include "timer.h"
 
 #define CONSUMER "Motor controller"
-#define SERVER_IP "52.66.241.14"
+#define SERVER_IP "192.168.193.106"
 #define DEVICE_ID 1
 
 #define STARTER_BUTTON_TIMER 200
 #define MSG_A_PERIOD_S 10
 #define GPIO_CHIP_0 "gpiochip0"
 #define GPIO_CHIP_1 "gpiochip1"
-#define VAL0_PIN 86
-#define VAL1_PIN 84
-#define NC_PIN 81
-#define NO_PIN 82
-#define MOTOR_STATE_PIN 85
+#define GPIO_CHIP_2 "gpiochip2"
+#define VAL0_PIN 15
+#define VAL1_PIN 18
+#define NC_PIN 0
+#define NO_PIN 1
+#define MOTOR_STATE_PIN 16
 #define MAX_CONN_ERR 3
 
 int client_socket = -1;
@@ -73,7 +74,7 @@ int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
 }
 
 int gpio_init() {
-  char *chipname = GPIO_CHIP_1;
+  char *chipname = GPIO_CHIP_2;
   chip = gpiod_chip_open_by_name(chipname);
   if (!chip) {
     printf("Open chip failed\n");
