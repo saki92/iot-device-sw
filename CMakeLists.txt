@@ -13,7 +13,7 @@ add_executable(motor-ctrl device.c timer.c)
 add_executable(server server.c timer.c)
 
 # Link the Paho MQTT C library to your executable
-target_link_libraries(motor-ctrl PRIVATE -lgpiod spi aes -lssl -lcrypto ${PAHO_MQTT_C_LIBRARY} json-c)
+target_link_libraries(motor-ctrl PRIVATE -lgpiod spi -lssl -lcrypto ${PAHO_MQTT_C_LIBRARY} json-c)
 target_link_libraries(server PRIVATE aes -lssl -lcrypto)
 
 add_subdirectory(spi_device)

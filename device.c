@@ -14,7 +14,6 @@
 #include <unistd.h>
 
 #include "MQTTClient.h"
-#include "aes/aes.h"
 #include "common.h"
 #include "server.h"
 #include "spi_device/spi.h"
@@ -24,7 +23,7 @@
 #define CONSUMER "Motor controller"
 
 #define STARTER_BUTTON_TIMER 200
-#define MSG_A_PERIOD_S 30
+#define MSG_A_PERIOD_S 5
 #define USB_POWER_RESET_TIME 5
 #define GPIO_CHIP_0 "gpiochip0"
 #define GPIO_CHIP_1 "gpiochip1"
@@ -36,12 +35,14 @@
 #define MOTOR_STATE_PIN 16
 #define MAX_CONN_ERR 3
 #define USB_POWER_PIN 26
+#define MODEM_RECONNECT_TIME 60
 
 #define ADDRESS "tcp://192.168.193.106:1883"
 #define CLIENTID "Kelakadu"
 #define TOPIC "voltage/"
 #define SUBS_TOPIC "command/"
-#define QOS 1
+#define QOS 0
+#define CMD_QOS 2
 #define TIMEOUT 10000L
 
 timer_w_t motor_cutoff_timer;
@@ -122,20 +123,6 @@ static void hard_reset_modem(void) {
   gpiod_line_set_value(usb_power, 1);
 }
 
-static uint8_t gen_GPIO_state_byte(void) {
-  int val0_state = gpiod_line_get_value(valve0);
-  int val1_state = gpiod_line_get_value(valve1);
-  int nc_state = gpiod_line_get_value(nc);
-  int no_state = gpiod_line_get_value(no);
-  int motor_state_val = gpiod_line_get_value(motor_state);
-
-  uint8_t byte = ((motor_state_val << 4) | (val1_state << 3) |
-                  (val0_state << 2) | (nc_state << 1) | no_state) &
-                 0xFF;
-
-  return byte;
-}
-
 static float adc_to_coil_curr_conv(const uint16_t v) {
   const float resolution = 0.05;
   const float zeroCurVal = 1.65;
@@ -207,7 +194,6 @@ static void send_phase_voltages(void) {
 
   // Convert the JSON object to a string
   const char *jsonString = json_object_to_json_string(jsonObj);
-  printf("JSON Message: %s\n", jsonString);
 
   // Prepare the MQTT message
   // Publish a message
@@ -218,7 +204,7 @@ static void send_phase_voltages(void) {
   pubmsg.qos = QOS;
   pubmsg.retained = 0;
 
-  // Publish the message to the ThingsBoard telemetry topic
+  // Publish the message to topic
   MQTTClient_publishMessage(client, TOPIC, &pubmsg, &token);
   printf("Publishing data: %s on topic %s\n", jsonString, TOPIC);
 
@@ -263,7 +249,7 @@ static void stop_motor_t(union sigval sv) {
 }
 
 // Function to control the motor
-static void setMotorState(const char *state, int timeout) {
+static void setMotorState(const char *state, const int timeout) {
   uint8_t curMotorState = gpiod_line_get_value(motor_state);
   if (strcmp(state, "on") == 0) {
     printf("Turning on the motor for %d minutes.\n", timeout);
@@ -289,11 +275,11 @@ static void setMotorState(const char *state, int timeout) {
 static void setValveState(const char *v0State) {
   printf("Setting valve0 state %s\n", v0State);
   if (strcmp(v0State, "close") == 0) {
-    gpiod_line_set_value(valve0, 0);
-    gpiod_line_set_value(valve1, 1);
-  } else if (strcmp(v0State, "open") == 0) {
     gpiod_line_set_value(valve0, 1);
     gpiod_line_set_value(valve1, 0);
+  } else if (strcmp(v0State, "open") == 0) {
+    gpiod_line_set_value(valve0, 0);
+    gpiod_line_set_value(valve1, 1);
   }
 }
 
@@ -309,26 +295,29 @@ static int messageArrived(void *context, char *topicName, int topicLen,
   parsed_json = json_tokener_parse(payload);
   if (!json_object_object_get_ex(parsed_json, "command", &command)) {
     printf("Error parsing command\n");
-    return 0;
+    goto graceful_end;
   }
   if (!json_object_object_get_ex(parsed_json, "state", &state)) {
     printf("Error parsing state\n");
-    return 0;
+    goto graceful_end;
   }
   if (!json_object_object_get_ex(parsed_json, "timeout", &timeout)) {
     printf("Error parsing timeout\n");
-    return 0;
+    goto graceful_end;
   }
 
   // Interpret and execute the command
   if (strcmp(json_object_get_string(command), "set_motor_state") == 0) {
+    printf("Received set_motor_state command\n");
     setMotorState(json_object_get_string(state), json_object_get_int(timeout));
   } else if (strcmp(json_object_get_string(command), "set_valve0_state") == 0) {
+    printf("Received set_valve0_state command\n");
     setValveState(json_object_get_string(state));
   } else {
     printf("Unknown command received.\n");
   }
 
+graceful_end:
   // Clean up
   MQTTClient_freeMessage(&message);
   MQTTClient_free(topicName);
@@ -357,8 +346,7 @@ static MQTTClient *make_connection() {
     if ((rc = MQTTClient_connect(client, &conn_opts)) != MQTTCLIENT_SUCCESS) {
       printf("Failed to connect, return code %d\n", rc);
       hard_reset_modem();
-      usleep(30 * 1000 * 1000); // wait for 30 sec
-      exit(EXIT_FAILURE);
+      usleep(MODEM_RECONNECT_TIME * 1000 * 1000); // wait for modem to connect to network
     } else {
       printf("MQTT connection established\n");
       break;
@@ -366,7 +354,7 @@ static MQTTClient *make_connection() {
   }
 
   // Subscribe to the topic
-  MQTTClient_subscribe(client, SUBS_TOPIC, QOS);
+  MQTTClient_subscribe(client, SUBS_TOPIC, CMD_QOS);
 
   printf("Listening for messages on topic: %s\n", SUBS_TOPIC);
   return &client;
