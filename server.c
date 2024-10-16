@@ -16,7 +16,6 @@ https://docs.google.com/document/d/1qKUy8KDCigRU7vQpS-_mssLqFaAL-WPIdzxzrYwKAF0
 
 #include "aes/aes.h"
 #include "server.h"
-#include "timer.h"
 
 #define CLIENT_INACTIVE_SEC 60
 
@@ -64,8 +63,8 @@ void store_data(const int in_socket, const char in_buffer[MSG_SIZE]) {
     start_timer(CLIENT_INACTIVE_SEC, 0, disconnect_client,
                 &current_device->device_connection_timer, device_idx);
   } else {
-    adjust_timer(CLIENT_INACTIVE_SEC, 0,
-                 &current_device->device_connection_timer);
+    adjust_timer(CLIENT_INACTIVE_SEC, 0, disconnect_client,
+                 &current_device->device_connection_timer, device_idx);
   }
   int idx = 1;
   current_device->passcode = *((int16_t *)(in_buffer + idx));
@@ -141,7 +140,7 @@ void disconnect_client(union sigval sv) {
   int addrlen = sizeof(address);
   int dev_idx = sv.sival_int;
   int socket = all_devices[dev_idx].socket;
-  timer_delete(all_devices[dev_idx].device_connection_timer);
+  timer_delete(all_devices[dev_idx].device_connection_timer.timerid);
   getpeername(socket, (struct sockaddr *)&address, (socklen_t *)&addrlen);
   printf("Host disconnected, ip %s, port %d\n", inet_ntoa(address.sin_addr),
          ntohs(address.sin_port));

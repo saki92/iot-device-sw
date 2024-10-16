@@ -22,8 +22,6 @@
 #include <json-c/json.h>
 
 #define CONSUMER "Motor controller"
-#define SERVER_IP "192.168.193.106"
-#define DEVICE_ID 1
 
 #define STARTER_BUTTON_TIMER 200
 #define MSG_A_PERIOD_S 30
@@ -46,10 +44,8 @@
 #define QOS 1
 #define TIMEOUT 10000L
 
-int client_socket = -1;
 timer_w_t motor_cutoff_timer;
 timer_w_t msg_A_timer;
-int conn_err_cnt = MAX_CONN_ERR;
 MQTTClient client;
 
 struct gpiod_chip *chip2;
@@ -63,12 +59,12 @@ struct gpiod_line *usb_power;
 
 enum pin_dir { INPUT, OUTPUT };
 
-int get_rssi(void) { return -33; }
+static int get_rssi(void) { return -33; }
 
-MQTTClient *make_connection();
+static MQTTClient *make_connection();
 
-int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
-               enum pin_dir dir) {
+static int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line,
+                      int pin, enum pin_dir dir) {
   if (!chip) {
     return -1;
   }
@@ -87,7 +83,7 @@ int assign_pin(struct gpiod_chip *chip, struct gpiod_line **line, int pin,
   return ret;
 }
 
-int gpio_init() {
+static int gpio_init() {
   {
     char *chipname = GPIO_CHIP_2;
     chip2 = gpiod_chip_open_by_name(chipname);
@@ -119,14 +115,14 @@ int gpio_init() {
   return ret;
 }
 
-void hard_reset_modem(void) {
+static void hard_reset_modem(void) {
   printf("Resetting USB power.\n");
   gpiod_line_set_value(usb_power, 0);
   usleep(USB_POWER_RESET_TIME * 1000 * 1000);
   gpiod_line_set_value(usb_power, 1);
 }
 
-uint8_t gen_GPIO_state_byte(void) {
+static uint8_t gen_GPIO_state_byte(void) {
   int val0_state = gpiod_line_get_value(valve0);
   int val1_state = gpiod_line_get_value(valve1);
   int nc_state = gpiod_line_get_value(nc);
@@ -138,58 +134,6 @@ uint8_t gen_GPIO_state_byte(void) {
                  0xFF;
 
   return byte;
-}
-
-void gen_msg_A(uint8_t buffer[MSG_SIZE]) {
-  buffer[0] = MSG_TYPE_A;
-  buffer[1] = PASSCODE_LO;
-  buffer[2] = PASSCODE_HI;
-  buffer[3] = DEVICE_ID;
-  buffer[4] = get_rssi();
-
-  uint16_t adc0 = get_raw_voltage(0);
-  uint16_t adc1 = get_raw_voltage(1);
-  uint16_t adc2 = get_raw_voltage(2);
-  uint16_t adc3 = get_raw_voltage(3);
-
-  buffer[5] = adc0 & 0xFF;       // 8 bits
-  buffer[6] = (adc0 >> 8) & 0x3; // MSB 2 bits
-
-  buffer[7] = adc1 & 0xFF;       // 8 bits
-  buffer[8] = (adc1 >> 8) & 0x3; // MSB 2 bits
-
-  buffer[9] = adc2 & 0xFF;        // 8 bits
-  buffer[10] = (adc2 >> 8) & 0x3; // MSB 2 bits
-
-  buffer[11] = adc3 & 0xFF;       // 8 bits
-  buffer[12] = (adc3 >> 8) & 0x3; // MSB 2 bits
-
-  int remTime = get_timer_state(&motor_cutoff_timer);
-  buffer[13] = remTime & 0xFF;
-  buffer[14] = (remTime >> 8) & 0xFF;
-
-  buffer[15] = gen_GPIO_state_byte();
-}
-
-void send_msg_A(union sigval sv) {
-  uint8_t message[MSG_SIZE];
-  memset(message, 0, sizeof(message));
-  gen_msg_A(message);
-  int sent_bytes = send(client_socket, message, sizeof(message), 0);
-  if (sent_bytes != MSG_SIZE) {
-    printf("Error. Sent %d out of %d bytes\n", sent_bytes, MSG_SIZE);
-    conn_err_cnt++;
-    if (conn_err_cnt >= MAX_CONN_ERR) {
-      // try reconnecting
-      close(client_socket);
-      stop_timer(&msg_A_timer);
-      // client_socket = make_connection();
-      start_timer(MSG_A_PERIOD_S, MSG_A_PERIOD_S, send_msg_A, &msg_A_timer, -1);
-      conn_err_cnt = 0;
-    }
-  } else {
-    conn_err_cnt = 0;
-  }
 }
 
 static float adc_to_coil_curr_conv(const uint16_t v) {
@@ -299,92 +243,27 @@ static void send_message(void) {
   send_phase_voltages();
 }
 
-void start_motor() {
+static void start_motor() {
   printf("Starting motor\n");
   gpiod_line_set_value(no, 1);
   usleep(STARTER_BUTTON_TIMER * 1000);
   gpiod_line_set_value(no, 0);
 }
 
-void stop_motor() {
+static void stop_motor() {
   printf("Stopping motor\n");
   gpiod_line_set_value(nc, 1);
   usleep(STARTER_BUTTON_TIMER * 1000);
   gpiod_line_set_value(nc, 0);
 }
 
-void stop_motor_t(union sigval sv) {
+static void stop_motor_t(union sigval sv) {
   stop_motor();
   stop_timer(&motor_cutoff_timer);
 }
 
-void handle_msg_B(uint8_t buffer[MSG_SIZE]) {
-  if (buffer[0] != MSG_TYPE_B)
-    return;
-
-  if ((buffer[1] != PASSCODE_LO) || (buffer[2] != PASSCODE_HI))
-    return;
-
-  if (buffer[3] != DEVICE_ID)
-    return;
-
-  printf("Received MSG B\n");
-  uint16_t remTime = ((buffer[5] << 8) & 0xFF00) | (buffer[4] & 0xFF);
-  uint8_t recMotorState = buffer[6] & 0x1;
-  uint8_t val0State = (buffer[6] >> 1) & 0x1;
-  uint8_t val1State = (buffer[6] >> 2) & 0x1;
-
-  // motor_state HI=OFF; LOW=ON
-  uint8_t curMotorState = gpiod_line_get_value(motor_state);
-  gpiod_line_set_value(valve0, val0State);
-  gpiod_line_set_value(valve1, val1State);
-
-  int remTimeSec = remTime * 60;
-
-  if (recMotorState) {
-    if ((remTime > 0) && (curMotorState)) {
-      start_motor();
-      start_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer, -1);
-    } else if ((remTime > 0) && (!curMotorState)) { // adjust timer
-      adjust_timer(remTimeSec, 0, stop_motor_t, &motor_cutoff_timer, -1);
-    }
-  } else {
-    if (!curMotorState) {
-      stop_motor();
-      stop_timer(&motor_cutoff_timer);
-    }
-  }
-}
-
-void receive_data(void) {
-
-  while (1) {
-    // Receive data from the server
-    int8_t buffer[AES_MSG_SIZE];
-    int rec_bytes = read(client_socket, buffer, sizeof(buffer));
-
-    // Close socket if server terminates connection
-    printf("got %d bytes\n", rec_bytes);
-    if (rec_bytes < 1) {
-      usleep(10 * 1000 * 1000);
-      continue;
-    }
-
-    // Decrypt recieved message
-    uint8_t iv[AES_IV_LENGTH_BYTE];
-    memcpy(iv, buffer, AES_IV_LENGTH_BYTE);
-    uint8_t key[AES_KEY_LENGTH_BYTE] = AES_KEY;
-    uint8_t decData[MSG_SIZE] = {0};
-    decryptAES(buffer + AES_IV_LENGTH_BYTE, MSG_SIZE + MSG_SIZE, key, iv,
-               decData);
-
-    // Process message
-    handle_msg_B(decData);
-  }
-}
-
 // Function to control the motor
-void setMotorState(const char *state, int timeout) {
+static void setMotorState(const char *state, int timeout) {
   uint8_t curMotorState = gpiod_line_get_value(motor_state);
   if (strcmp(state, "on") == 0) {
     printf("Turning on the motor for %d minutes.\n", timeout);
@@ -407,7 +286,7 @@ void setMotorState(const char *state, int timeout) {
 
 // Function to control valve states
 // both valves cannot be closed at the same time
-void setValveState(const char *v0State) {
+static void setValveState(const char *v0State) {
   printf("Setting valve0 state %s\n", v0State);
   if (strcmp(v0State, "close") == 0) {
     gpiod_line_set_value(valve0, 0);
@@ -419,8 +298,8 @@ void setValveState(const char *v0State) {
 }
 
 // Message arrival callback function
-int messageArrived(void *context, char *topicName, int topicLen,
-                   MQTTClient_message *message) {
+static int messageArrived(void *context, char *topicName, int topicLen,
+                          MQTTClient_message *message) {
   char *payload = message->payload;
 
   // Parse the JSON message
@@ -457,7 +336,7 @@ int messageArrived(void *context, char *topicName, int topicLen,
   return 1;
 }
 
-MQTTClient *make_connection() {
+static MQTTClient *make_connection() {
   MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
   int rc;
 
